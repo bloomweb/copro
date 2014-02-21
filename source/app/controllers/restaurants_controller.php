@@ -1,0 +1,314 @@
+<?php
+class RestaurantsController extends AppController {
+
+	var $name = 'Restaurants';
+
+	private function isManager($restaurant_id = null) {
+		if ($restaurant_id) {
+			$zones = $this -> Restaurant -> Zone -> find('list', array('fields' => array('Zone.id'), 'conditions' => array('Zone.city_id' => $this -> Auth -> user('city_id'))));
+			$restaurant = $this -> Restaurant -> find('first', array('conditions' => array('Restaurant.id' => $restaurant_id, 'Restaurant.zone_id' => $zones)));
+			if(!empty($restaurant)) {
+				return true;
+			} else {
+				return false;
+			}
+		} else {
+			return false;
+		}
+	}
+	
+	private function isOwner($restaurant_id = null) {
+		if ($restaurant_id) {
+			$restaurant = $this -> Restaurant -> find('first', array('conditions' => array('Restaurant.id' => $restaurant_id, 'Restaurant.owner_id' => $this -> Auth -> user('id'))));
+			if(!empty($restaurant)) {
+				return true;
+			} else {
+				return false;
+			}
+		} else {
+			return false;
+		}
+	}
+
+	function admin_index() {
+		$this -> Restaurant -> recursive = 0;
+		if(!empty($this -> data)) {
+			// Armar condiciones de paginado
+			$conditions = array();
+			if(isset($this -> data['Filtros']['barrio']) && !empty($this -> data['Filtros']['barrio'])) {
+				$zones = $this -> Restaurant -> Zone -> find(
+					'list',
+					array(
+						'conditions' => array(
+							'Zone.name LIKE' => '%' . $this -> data['Filtros']['barrio'] . '%'
+						),
+						'fields' => array('Zone.id'),
+						'recursive' => -1
+					)
+				);
+				$conditions['Restaurant.zone_id'] = $zones;
+			}
+			if(isset($this -> data['Filtros']['nombre']) && !empty($this -> data['Filtros']['nombre'])) {
+				$conditions['Restaurant.name LIKE'] = '%' . $this -> data['Filtros']['nombre'] . '%';
+			}
+			if(isset($this -> data['Filtros']['telefono']) && !empty($this -> data['Filtros']['telefono'])) {
+				$conditions['Restaurant.phone LIKE'] = '%' . $this -> data['Filtros']['telefono'] . '%';
+			}
+			// Asignar condiciones de paginado
+			$this -> paginate = array(
+				'order' => array('Restaurant.id' => 'DESC'),
+				'conditions' => $conditions
+			);
+		}
+		$this -> set('restaurants', $this -> paginate());
+	}
+
+	function admin_view($id = null) {
+		if (!$id) {
+			$this -> Session -> setFlash(__('Restaurante no válido', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		$this -> set('restaurant', $this -> Restaurant -> read(null, $id));
+	}
+	
+	function zonesByCity($city_id = null, $restaurant_id = null) {
+		$this -> layout = 'ajax';
+		
+		$zones = $this -> Restaurant -> Zone -> find('list', array('conditions' => array('Zone.city_id' => $city_id)));
+		
+		if($restaurant_id) {
+			$restaurant_zones = $this -> Restaurant -> RestaurantsZone -> find('list', array('fields' => array('RestaurantsZone.zone_id'), 'conditions' => array('RestaurantsZone.restaurant_id' => $restaurant_id)));
+			$this -> set('restaurant_zones', $restaurant_zones);
+		}
+		
+		$this -> set('zones',$zones);
+	}
+
+	function admin_add() {
+		if (!empty($this -> data)) {
+			if(isset($this -> data['Owner']['password'])) {
+				$this -> data['Owner']['password'] = $this -> Auth -> password($this -> data['Owner']['password']);
+			}
+			if(isset($this -> data['Owner']['id']) && !empty($this -> data['Owner']['id'])) {
+				$this -> data['Restaurant']['owner_id'] = $this -> data['Owner']['id'];
+				unset($this -> data['Owner']);
+			}
+			if($this -> Restaurant -> saveAll($this -> data)) {
+				$this -> Session -> setFlash(__('Se registró el restaurante', true));
+				$this -> redirect(array('action' => 'index'));
+			} else {
+				$this -> Session -> setFlash(__('No se pudo registrar el restaurante. Por favor, intente de nuevo.', true));
+			}
+		}
+		$countries = $this -> Restaurant -> Zone -> City -> Country -> find('list', array('conditions' => array('is_present' => true)));
+		// $cities = $this->Restaurant->Zone->City->find('list');
+		// $zones = $this -> Restaurant -> Zone -> find('list');
+		$this -> set(compact('countries'));
+	}
+
+	function admin_edit($id = null) {
+		if (!$id && empty($this -> data)) {
+			$this -> Session -> setFlash(__('Restaurante no válido', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		if (!empty($this -> data)) {
+			if ($this -> Restaurant -> save($this -> data)) {
+				$this -> Session -> setFlash(__('Se registró el restaurante', true));
+				$this -> redirect(array('action' => 'index'));
+			} else {
+				$this -> Session -> setFlash(__('No se pudo registrar el restaurante. Por favor, intente de nuevo.', true));
+			}
+		}
+		if (empty($this -> data)) {
+			$this -> data = $this -> Restaurant -> read(null, $id);
+		}
+		$city = $this -> Restaurant -> Zone -> City -> read(null, $this -> data['Zone']['city_id']);
+		$cities = $this -> Restaurant -> Zone -> City -> find('list', array('conditions' => array('is_present' => true, 'country_id' => $city['Country']['id'])));
+		$zones = $this -> Restaurant -> Zone -> find('list', array('conditions' => array('city_id' => $city['City']['id'])));
+		$countries = $this -> Restaurant -> Zone -> City -> Country -> find('list', array('conditions' => array('is_present' => true)));
+		$this -> set(compact('zones', 'cities', 'countries', 'city'));
+	}
+
+	function admin_delete($id = null) {
+		if (!$id) {
+			$this -> Session -> setFlash(__('ID de restaurante no válida', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		if ($this -> Restaurant -> delete($id)) {
+			$this -> Session -> setFlash(__('Se eliminó el restaurante', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		$this -> Session -> setFlash(__('No se eliminó el restaurante', true));
+		$this -> redirect(array('action' => 'index'));
+	}
+
+	function manager_index() {
+		$this -> Restaurant -> recursive = 0;
+		
+		// Armar condiciones de paginado
+		$conditions = array();
+		$zones = $this -> Restaurant -> Zone -> find('list', array('fields' => array('Zone.id'), 'conditions' => array('Zone.city_id' => $this -> Auth -> user('city_id'))));
+		$conditions['Restaurant.zone_id'] = $zones;
+		
+		if(!empty($this -> data)) {
+			if(isset($this -> data['Filtros']['barrio']) && !empty($this -> data['Filtros']['barrio'])) {
+				$zones = $this -> Restaurant -> Zone -> find(
+					'list',
+					array(
+						'conditions' => array(
+							'Zone.name LIKE' => '%' . $this -> data['Filtros']['barrio'] . '%'
+						),
+						'fields' => array('Zone.id'),
+						'recursive' => -1
+					)
+				);
+				foreach($zones as $key => $zone) {
+					if(!in_array($zone, $conditions['Restaurant.zone_id'])) {
+						unset($zones[$key]);
+					}
+				}
+				$conditions['Restaurant.zone_id'] = $zones;
+			}
+			if(isset($this -> data['Filtros']['nombre']) && !empty($this -> data['Filtros']['nombre'])) {
+				$conditions['Restaurant.name LIKE'] = '%' . $this -> data['Filtros']['nombre'] . '%';
+			}
+			if(isset($this -> data['Filtros']['telefono']) && !empty($this -> data['Filtros']['telefono'])) {
+				$conditions['Restaurant.phone LIKE'] = '%' . $this -> data['Filtros']['telefono'] . '%';
+			}
+		}
+
+		// Asignar condiciones de paginado
+		$this -> paginate = array(
+			'order' => array('Restaurant.id' => 'DESC'),
+			'conditions' => $conditions
+		);
+		$this -> set('restaurants', $this -> paginate());
+	}
+
+	function manager_view($id = null) {
+		if (!$id || !$this -> isManager($id)) {
+			$this -> Session -> setFlash(__('Restaurante no válido', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		$this -> set('restaurant', $this -> Restaurant -> read(null, $id));
+	}
+
+	function manager_add() {
+		if (!empty($this -> data)) {
+			if(isset($this -> data['Owner']['password'])) {
+				$this -> data['Owner']['password'] = $this -> Auth -> password($this -> data['Owner']['password']);
+			}
+			if(isset($this -> data['Owner']['id'])) {
+				$this -> data['Restaurant']['owner_id'] = $this -> data['Owner']['id'];
+				unset($this -> data['Owner']);
+			}
+			if($this -> Restaurant -> saveAll($this -> data)) {
+				$this -> Session -> setFlash(__('Se registró el restaurante', true));
+				$this -> redirect(array('action' => 'index'));
+			} else {
+				$this -> Session -> setFlash(__('No se pudo registrar el restaurante. Por favor, intente de nuevo.', true));
+			}
+		}
+		$zones = $this -> Restaurant -> Zone -> find('list', array('conditions' => array('Zone.city_id' => $this -> Auth -> user('city_id'))));
+		$this -> set(compact('zones'));
+	}
+
+	function manager_edit($id = null) {
+		if ((!$id && empty($this -> data)) || !$this -> isManager($id)) {
+			$this -> Session -> setFlash(__('Restaurante no válido', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		if (!empty($this -> data) && $this -> isManager($this -> data['Restaurant']['id'])) {
+			if ($this -> Restaurant -> save($this -> data)) {
+				$this -> Session -> setFlash(__('Se registró el restaurante', true));
+				$this -> redirect(array('action' => 'index'));
+			} else {
+				$this -> Session -> setFlash(__('No se pudo registrar el restaurante. Por favor, intente de nuevo.', true));
+			}
+		}
+		if (empty($this -> data)) {
+			$this -> data = $this -> Restaurant -> read(null, $id);
+		}
+		$zones = $this -> Restaurant -> Zone -> find('list', array('conditions' => array('Zone.city_id' => $this -> Auth -> user('city_id'))));
+		$this -> set(compact('zones'));
+	}
+
+	function manager_delete($id = null) {
+		if (!$id || !$this -> isManager($id)) {
+			$this -> Session -> setFlash(__('ID de restaurante no válida', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		if ($this -> Restaurant -> delete($id)) {
+			$this -> Session -> setFlash(__('Se eliminó el restaurante', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		$this -> Session -> setFlash(__('No se eliminó el restaurante', true));
+		$this -> redirect(array('action' => 'index'));
+	}
+	
+	function owner_index() {
+		$this -> Restaurant -> recursive = 0;
+		
+		// Armar condiciones de paginado
+		$conditions = array();
+		$restaurants = $this -> Restaurant -> find('list', array('conditions' => array('Restaurant.owner_id' => $this -> Auth -> user('id')), 'fields' => array('Restaurant.id')));
+		$conditions['Restaurant.id'] = $restaurants;
+		
+		if(!empty($this -> data)) {
+			if(isset($this -> data['Filtros']['barrio']) && !empty($this -> data['Filtros']['barrio'])) {
+				$zones = $this -> Restaurant -> Zone -> find(
+					'list',
+					array(
+						'conditions' => array(
+							'Zone.name LIKE' => '%' . $this -> data['Filtros']['barrio'] . '%'
+						),
+						'fields' => array('Zone.id'),
+						'recursive' => -1
+					)
+				);
+				$conditions['Restaurant.zone_id'] = $zones;
+			}
+			if(isset($this -> data['Filtros']['nombre']) && !empty($this -> data['Filtros']['nombre'])) {
+				$conditions['Restaurant.name LIKE'] = '%' . $this -> data['Filtros']['nombre'] . '%';
+			}
+			if(isset($this -> data['Filtros']['telefono']) && !empty($this -> data['Filtros']['telefono'])) {
+				$conditions['Restaurant.phone LIKE'] = '%' . $this -> data['Filtros']['telefono'] . '%';
+			}
+		}
+
+		// Asignar condiciones de paginado
+		$this -> paginate = array(
+			'order' => array('Restaurant.id' => 'DESC'),
+			'conditions' => $conditions
+		);
+		
+		$this -> set('restaurants', $this -> paginate());
+	}
+	
+	function owner_view($id = null) {
+		if (!$id || !$this -> isOwner($id)) {
+			$this -> Session -> setFlash(__('Restaurante no válido', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		$this -> set('restaurant', $this -> Restaurant -> read(null, $id));
+	}
+	
+	function owner_edit($id = null) {
+		if ((!$id && empty($this -> data)) || !$this -> isOwner($id)) {
+			$this -> Session -> setFlash(__('Restaurante no válido', true));
+			$this -> redirect(array('action' => 'index'));
+		}
+		if (!empty($this -> data) && $this -> isOwner($this -> data['Restaurant']['id'])) {
+			if ($this -> Restaurant -> save($this -> data)) {
+				$this -> Session -> setFlash(__('Se registró el restaurante', true));
+				$this -> redirect(array('action' => 'index'));
+			} else {
+				$this -> Session -> setFlash(__('No se pudo registrar el restaurante. Por favor, intente de nuevo.', true));
+			}
+		}
+		if (empty($this -> data)) {
+			$this -> data = $this -> Restaurant -> read(null, $id);
+		}
+	}
+
+}
